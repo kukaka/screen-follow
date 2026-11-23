@@ -19,6 +19,12 @@ Unzip the application archive and open `ScreenFollow.app`. Click the overlapping
 
 Switching is manual. ScreenFollow checks the display layout when you open the menu or choose an action. It has no polling timer, login item, or background helper.
 
+## Disable Wi-Fi while locked
+
+**Disable Wi-Fi While Locked** is enabled by default. While ScreenFollow is running, it turns Wi-Fi off on lock and turns it back on when you unlock. Wi-Fi that was already off when you locked stays off. Use the menu item to pause or resume this behavior. Your choice is saved.
+
+ScreenFollow needs to stay running through both events to restore Wi-Fi. The feature works independently of the display setup. If macOS requires administrator authentication to change Wi-Fi power, ScreenFollow skips the change.
+
 ## Build from source
 
 With Apple's Command Line Tools installed, run from the project root:
@@ -28,7 +34,7 @@ With Apple's Command Line Tools installed, run from the project root:
 open build/ScreenFollow.app
 ```
 
-The build uses AppKit and Core Graphics, bundles the Finder icon, and applies an ad hoc signature. The packaged app is not notarized.
+The build uses AppKit, Core Graphics, and CoreWLAN, bundles the Finder icon, and applies an ad hoc signature. The packaged app is not notarized.
 
 To create a ZIP of the built app:
 

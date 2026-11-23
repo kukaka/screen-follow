@@ -1,5 +1,11 @@
 #import <AppKit/AppKit.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <CoreWLAN/CoreWLAN.h>
+#import <os/log.h>
+
+static NSString *const WiFiOffOnLockKey = @"WiFiOffOnLock";
+static NSString *const ScreenLockedNotification = @"com.apple.screenIsLocked";
+static NSString *const ScreenUnlockedNotification = @"com.apple.screenIsUnlocked";
 
 static NSImage *StatusIcon(void) {
     NSImage *image = [NSImage imageWithSize:NSMakeSize(19, 16)
@@ -32,6 +38,20 @@ static NSImage *StatusIcon(void) {
     return image;
 }
 
+static BOOL SetWiFiPower(CWInterface *interface, BOOL power) {
+    if (interface.configuration.requireAdministratorForPower) {
+        os_log_error(OS_LOG_DEFAULT, "ScreenFollow: Wi-Fi power changes require administrator authentication.");
+        return NO;
+    }
+
+    NSError *error = nil;
+    if ([interface setPower:power error:&error]) return YES;
+
+    os_log_error(OS_LOG_DEFAULT, "ScreenFollow: Unable to turn Wi-Fi %{public}s (%{public}@, %ld).",
+                 power ? "on" : "off", error.domain, (long)error.code);
+    return NO;
+}
+
 @interface ScreenFollow : NSObject <NSApplicationDelegate, NSMenuDelegate>
 @end
 
@@ -39,6 +59,8 @@ static NSImage *StatusIcon(void) {
     NSStatusItem *_statusItem;
     NSMenuItem *_single;
     NSMenuItem *_dual;
+    NSMenuItem *_wifiOffOnLock;
+    NSString *_wifiInterfaceToRestore;
 }
 
 static BOOL FindDisplays(CGDirectDisplayID *dell, CGDirectDisplayID *main) {
@@ -68,11 +90,57 @@ static BOOL FindDisplays(CGDirectDisplayID *dell, CGDirectDisplayID *main) {
     _single = [menu addItemWithTitle:@"Switch to Single Desktop" action:@selector(singleDesktop) keyEquivalent:@""];
     _dual = [menu addItemWithTitle:@"Restore Extended Desktop" action:@selector(dualDesktop) keyEquivalent:@""];
     [menu addItem:NSMenuItem.separatorItem];
+    _wifiOffOnLock = [menu addItemWithTitle:@"Disable Wi-Fi While Locked"
+                                    action:@selector(toggleWiFiOffOnLock) keyEquivalent:@""];
+    _wifiOffOnLock.target = self;
+    [menu addItem:NSMenuItem.separatorItem];
     NSMenuItem *quit = [menu addItemWithTitle:@"Quit ScreenFollow" action:@selector(terminate:) keyEquivalent:@""];
     _single.target = self;
     _dual.target = self;
     quit.target = NSApp;
     _statusItem.menu = menu;
+
+    [NSUserDefaults.standardUserDefaults registerDefaults:@{WiFiOffOnLockKey: @YES}];
+    [NSDistributedNotificationCenter.defaultCenter addObserver:self
+                                                      selector:@selector(screenDidLock:)
+                                                          name:ScreenLockedNotification
+                                                        object:nil
+                                            suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
+    [NSDistributedNotificationCenter.defaultCenter addObserver:self
+                                                      selector:@selector(screenDidUnlock:)
+                                                          name:ScreenUnlockedNotification
+                                                        object:nil
+                                            suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
+}
+
+- (void)toggleWiFiOffOnLock {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    [defaults setBool:![defaults boolForKey:WiFiOffOnLockKey] forKey:WiFiOffOnLockKey];
+}
+
+- (void)screenDidLock:(NSNotification *)notification {
+    if (![NSUserDefaults.standardUserDefaults boolForKey:WiFiOffOnLockKey]) return;
+
+    CWInterface *interface = CWWiFiClient.sharedWiFiClient.interface;
+    NSString *name = interface.interfaceName;
+    if (name.length && interface.powerOn && SetWiFiPower(interface, NO)) {
+        _wifiInterfaceToRestore = [name copy];
+    }
+}
+
+- (void)screenDidUnlock:(NSNotification *)notification {
+    NSString *name = _wifiInterfaceToRestore;
+    _wifiInterfaceToRestore = nil;
+    if (!name) return;
+
+    CWInterface *interface = [CWWiFiClient.sharedWiFiClient interfaceWithName:name];
+    if (interface && !interface.powerOn) SetWiFiPower(interface, YES);
+}
+
+- (void)applicationWillTerminate:(NSNotification *)notification {
+    NSDistributedNotificationCenter *center = NSDistributedNotificationCenter.defaultCenter;
+    [center removeObserver:self name:ScreenLockedNotification object:nil];
+    [center removeObserver:self name:ScreenUnlockedNotification object:nil];
 }
 
 - (void)menuNeedsUpdate:(NSMenu *)menu {
@@ -81,6 +149,8 @@ static BOOL FindDisplays(CGDirectDisplayID *dell, CGDirectDisplayID *main) {
     BOOL mirrored = available && CGDisplayMirrorsDisplay(dell) == main;
     _single.enabled = available && !mirrored && CGDisplayIsActive(dell);
     _dual.enabled = mirrored;
+    _wifiOffOnLock.state = [NSUserDefaults.standardUserDefaults boolForKey:WiFiOffOnLockKey]
+        ? NSControlStateValueOn : NSControlStateValueOff;
 }
 
 - (void)singleDesktop { [self applyMirror:YES]; }
